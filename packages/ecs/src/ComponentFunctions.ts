@@ -131,7 +131,7 @@ export interface ComponentPartial<
    * `@todo` Explain what reactive is in this context
    * `@todo` Explain this function
    */
-  reactor?: React.FC
+  reactor?: any // why does React.FC break types? (see also StateDefinition)
   /**
    * @todo Explain ComponentPartial.errors[]
    */
