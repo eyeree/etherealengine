@@ -51,6 +51,9 @@ import { EntityContext } from './EntityFunctions'
 import { useExecute } from './SystemFunctions'
 import { PresentationSystemGroup } from './SystemGroups'
 import { defineQuery } from './QueryFunctions'
+import { subscribable, Subscribable } from '@hookstate/subscribable'
+
+export type ComponentState<ComponentType> = State<ComponentType, Subscribable>
 
 /**
  * @description
@@ -111,7 +114,7 @@ export interface ComponentPartial<
    * @param entity The {@link Entity} to which this Component is assigned.
    * @param component The Component's global data (aka {@link State}).
    */
-  toJSON?: (entity: Entity, component: State<ComponentType>) => JSON
+  toJSON?: (entity: Entity, component: ComponentState<ComponentType>) => JSON
   /**
    * @description
    * Called when the component's data is updated via the {@link setComponent} function.
@@ -120,9 +123,9 @@ export interface ComponentPartial<
    * @param component The Component's global data (aka {@link State}).
    * @param json The JSON object that contains this component's serialized data.
    */
-  onSet?: (entity: Entity, component: State<ComponentType>, json?: SetJSON) => void
+  onSet?: (entity: Entity, component: ComponentState<ComponentType>, json?: SetJSON) => void
   /** @todo Explain ComponentPartial.onRemove(...) */
-  onRemove?: (entity: Entity, component: State<ComponentType>) => void | Promise<void>
+  onRemove?: (entity: Entity, component: ComponentState<ComponentType>) => void | Promise<void>
   /**
    * @summary Defines the {@link React.FC} async logic of the {@link Component} type.
    * @notes Any side-effects that depend on the component's data should be defined here.
@@ -131,7 +134,7 @@ export interface ComponentPartial<
    * `@todo` Explain what reactive is in this context
    * `@todo` Explain this function
    */
-  reactor?: React.FC
+  reactor?: any // why does React.FC break types? (see also StateDefinition)
   /**
    * @todo Explain ComponentPartial.errors[]
    */
@@ -157,12 +160,12 @@ export interface Component<
   jsonID?: string
   schema?: Schema
   onInit: (this: SoAComponentType<Schema>, entity: Entity) => ComponentType & OnInitValidateNotState<ComponentType>
-  toJSON: (entity: Entity, component: State<ComponentType>) => JSON
-  onSet: (entity: Entity, component: State<ComponentType>, json?: SetJSON) => void
-  onRemove: (entity: Entity, component: State<ComponentType>) => void
+  toJSON: (entity: Entity, component: ComponentState<ComponentType>) => JSON
+  onSet: (entity: Entity, component: ComponentState<ComponentType>, json?: SetJSON) => void
+  onRemove: (entity: Entity, component: ComponentState<ComponentType>) => void
   reactor?: HookableFunction<React.FC>
   reactorMap: Map<Entity, ReactorRoot>
-  stateMap: Record<Entity, State<ComponentType> | undefined>
+  stateMap: Record<Entity, ComponentState<ComponentType> | undefined>
   errors: ErrorTypes[]
 }
 
@@ -265,8 +268,9 @@ export const defineComponent = <
 export const getOptionalMutableComponent = <ComponentType>(
   entity: Entity,
   component: Component<ComponentType, Record<string, any>, unknown>
-): State<ComponentType> | undefined => {
-  if (!component.stateMap[entity]) component.stateMap[entity] = hookstate(none) as State<ComponentType>
+): ComponentState<ComponentType> | undefined => {
+  if (!component.stateMap[entity])
+    component.stateMap[entity] = hookstate(none, subscribable()) as ComponentState<ComponentType>
   const componentState = component.stateMap[entity]!
   return componentState.promised ? undefined : componentState
 }
@@ -274,7 +278,7 @@ export const getOptionalMutableComponent = <ComponentType>(
 export const getMutableComponent = <ComponentType>(
   entity: Entity,
   component: Component<ComponentType, Record<string, any>, unknown>
-): State<ComponentType> => {
+): ComponentState<ComponentType> => {
   const componentState = getOptionalMutableComponent(entity, component)
   if (!componentState || componentState.promised) {
     console.warn(
@@ -335,7 +339,7 @@ export const setComponent = <C extends Component>(
     const value = Component.onInit(entity)
 
     if (!Component.stateMap[entity]) {
-      Component.stateMap[entity] = hookstate(value)
+      Component.stateMap[entity] = hookstate(value, subscribable())
     } else {
       Component.stateMap[entity]!.set(value)
     }
@@ -543,5 +547,29 @@ export const getAllComponentsOfType = <C extends Component<any>>(component: C): 
   bitECS.removeQuery(HyperFlux.store, query._query)
   return entities.map((e) => {
     return getComponent(e, component)!
+  })
+}
+
+export function linkComponentProperties<
+  ComponentTypeA,
+  ComponentA extends Component<ComponentTypeA>,
+  PropertyNameA extends keyof ComponentTypeA,
+  ComponentTypeB,
+  ComponentB extends Component<ComponentTypeB>,
+  PropertyNameB extends keyof ComponentTypeB
+>(
+  entityA: Entity,
+  ComponentA: ComponentA,
+  propertyNameA: keyof ComponentTypeA,
+  entityB: Entity,
+  ComponentB: ComponentB,
+  propertyNameB: keyof ComponentTypeB,
+  fn: (value: ComponentTypeA[PropertyNameA]) => ComponentTypeB[PropertyNameB]
+) {
+  return ComponentA.stateMap[entityA]!.nested(propertyNameA).subscribe((value) => {
+    const newValue = fn(value as ComponentTypeA[PropertyNameA])
+    // console.log('subscribed', entityA, propertyNameA, '->', entityB, propertyNameB, ':', value, '->', newValue);
+    const componentB = getMutableComponent(entityB, ComponentB)
+    componentB.nested(propertyNameB).set(newValue)
   })
 }
